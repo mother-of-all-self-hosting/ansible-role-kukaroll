@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+---
+
+- name: Check existence of the kukaroll deploys target
+  ansible.builtin.stat:
+    path: "{{ devture_systemd_docker_base_systemd_path }}/{{ kukaroll_identifier }}-deploys.target"
+  register: kukaroll_deploys_target_stat
+
+# A webhook arriving meanwhile leaves its spool file behind, which fires as soon as the target starts again.
+# If the run fails before that, deploys stay paused until the next run (or a reboot).
+- name: Pause kukaroll deploys and wait for running ones
+  when: kukaroll_deploys_target_stat.stat.exists | bool
+  block:
+    - name: Ensure kukaroll deploys are paused
+      ansible.builtin.systemd_service:
+        name: "{{ kukaroll_identifier }}-deploys.target"
+        state: stopped
+
+    - name: Wait for running kukaroll deploys to finish
+      ansible.builtin.command:
+        cmd: "{{ devture_systemd_docker_base_host_command_systemctl }} list-units --no-legend --plain --state=active,activating,deactivating '{{ kukaroll_identifier }}-execute@*.service'"
+      register: kukaroll_running_deploys
+      changed_when: false
+      check_mode: false
+      until: kukaroll_running_deploys.stdout_lines | length == 0
+      retries: "{{ (kukaroll_executor_timeout_seconds | int / 10) | round(0, 'ceil') | int + 6 }}"
+      delay: 10

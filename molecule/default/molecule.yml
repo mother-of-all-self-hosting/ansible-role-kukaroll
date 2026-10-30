@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+# SPDX-FileCopyrightText: 2026 spatterlight
+# SPDX-FileCopyrightText: 2026 Suguru Hirahara
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+---
+dependency:
+  name: galaxy
+  options:
+    requirements-file: requirements.yml
+    force: true
+driver:
+  name: docker
+platforms:
+  - name: kukaroll-${MOLECULE_DISTRO:-ubuntu2604}-default
+    image: "geerlingguy/docker-${MOLECULE_DISTRO:-ubuntu2604}-ansible:latest"
+    command: ${MOLECULE_DOCKER_COMMAND:-""}
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      # Docker inside the instance stores images via containerd.
+      # Its storage cannot use overlay on top of the instance's own overlay filesystem, so a volume puts it on a real filesystem.
+      - /var/lib/containerd
+    # Remove volumes along with the instance, so that local runs do not leave gigabytes behind.
+    keep_volumes: false
+    cgroupns_mode: host
+    privileged: true
+    pre_build_image: true
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      callback_result_format: yaml
+  inventory:
+    group_vars:
+      all:
+        # Helper variables
+        kukaroll_debug_service_enabled: false
+        kukaroll_restarts_check_enabled: true
+
+        # The project prepare.yml sets up: a bare repository standing in for the forge, and a checkout of it.
+        kukaroll_molecule_project_origin: /srv/myapp.git
+        kukaroll_molecule_project_checkout: /srv/myapp
+        # Where the project's deploy hook records the commit it ran at.
+        kukaroll_molecule_project_deploy_marker: /srv/myapp-deployed
+
+        # Variables for kukaroll
+        kukaroll_uid: 1000
+        kukaroll_gid: 1000
+        kukaroll_container_labels_traefik_enabled: false
+        kukaroll_receiver_container_http_host_bind_port: 127.0.0.1:8080
+        # In mash-playbook, the service manager starts the deploys target again after pausing.
+        # Here nothing would, and the idempotence run would see the target stopped and started again.
+        kukaroll_pause_enabled: false
+        kukaroll_projects:
+          myapp:
+            checkout: "{{ kukaroll_molecule_project_checkout }}"
+            remote: origin
+            branch: main
+            git_user: root
+            hooks_user: root
+            lock_file: /srv/myapp-deploy.lock
+            pre_flight: null
+            deploy: [sh, -c, "git rev-parse HEAD > {{ kukaroll_molecule_project_deploy_marker }}"]
+            healthchecks_ping_url: null
+            webhook_provider: forgejo
+            webhook_secret: molecule-webhook-secret-5c1e
+            webhook_authorization_header: null
+  env:
+    # Workaround for https://github.com/ansible/molecule/issues/4391
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..:/.ansible/roles:/usr/share/ansible/roles:/etc/ansible/roles:~/.ansible/roles
+verifier:
+  name: ansible

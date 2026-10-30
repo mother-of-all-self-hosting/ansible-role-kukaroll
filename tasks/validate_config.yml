@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+---
+
+- name: Fail if required kukaroll settings are not defined
+  ansible.builtin.fail:
+    msg: "You need to define a required configuration setting (`{{ item }}`)."
+  when: "lookup('vars', item, default='') | string | length == 0"
+  with_items:
+    - kukaroll_identifier
+    - kukaroll_uid
+    - kukaroll_gid
+    - kukaroll_container_image
+
+- name: Fail if kukaroll_catch_up_timer_on_calendar is not set
+  ansible.builtin.fail:
+    msg: "You need to set `kukaroll_catch_up_timer_on_calendar` to a systemd calendar expression (or disable the timer with `kukaroll_catch_up_timer_enabled: false`)."
+  when: kukaroll_catch_up_timer_enabled | bool and (kukaroll_catch_up_timer_on_calendar is not string or kukaroll_catch_up_timer_on_calendar | length == 0)
+
+- name: Fail if a kukaroll project name is invalid
+  ansible.builtin.fail:
+    msg: "kukaroll project names must be lowercase letters, digits, dashes and underscores, starting with a letter or digit, at most 64 characters, not `{{ item }}`."
+  loop: "{{ kukaroll_projects | list | reject('match', '^[a-z0-9][a-z0-9_-]{0,63}$') | list }}"
+
+# kukaroll itself validates the rest (see check-config in install.yml), except for these, which only the role uses.
+- name: Fail if a kukaroll project lacks a setting
+  ansible.builtin.fail:
+    msg: "kukaroll project `{{ item.0.key }}` lacks `{{ item.1 }}` (every key is required; see kukaroll_projects in the role's defaults)."
+  when: item.1 not in item.0.value
+  loop: "{{ kukaroll_projects | dict2items | product(['checkout', 'remote', 'branch', 'git_user', 'hooks_user', 'lock_file', 'pre_flight', 'deploy', 'healthchecks_ping_url', 'webhook_provider', 'webhook_secret', 'webhook_authorization_header']) | list }}"
+  loop_control:
+    label: "{{ item.0.key }}.{{ item.1 }}"
+
+# It ends up in a Traefik rule, between backticks.
+- name: Fail if a kukaroll project's webhook authorization header is invalid
+  ansible.builtin.fail:
+    msg: "kukaroll project `{{ item.key }}` has an invalid `webhook_authorization_header`: it must be null or a non-empty string of printable ASCII characters other than backticks, without leading or trailing spaces."
+  when: item.value.webhook_authorization_header is not none and (item.value.webhook_authorization_header is not string or item.value.webhook_authorization_header is not match('^[!-_a-~]([ -_a-~]*[!-_a-~])?$'))
+  loop: "{{ kukaroll_projects | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true
+
+# Like the hostname, it ends up in a Traefik rule, between backticks.
+- name: Fail if kukaroll_path_prefix is invalid
+  ansible.builtin.fail:
+    msg: "kukaroll_container_labels_traefik_path_prefix (`{{ kukaroll_container_labels_traefik_path_prefix }}`) must be `/` or slash-separated segments of letters, digits, `.`, `_`, `~` and `-`, starting with a slash and not ending with one (e.g. `/kukaroll`)."
+  when: kukaroll_container_labels_traefik_path_prefix != '/' and kukaroll_container_labels_traefik_path_prefix is not match('^(/[A-Za-z0-9._~-]+)+$')
+
+- name: Fail if kukaroll_container_labels_traefik_max_request_body_bytes is invalid
+  ansible.builtin.fail:
+    msg: "kukaroll_container_labels_traefik_max_request_body_bytes must be a non-negative integer (0 disables the limit)."
+  when: kukaroll_container_labels_traefik_max_request_body_bytes | string is not match('^[0-9]+$')
+
+- name: Fail if kukaroll's Traefik hostname is not defined
+  ansible.builtin.fail:
+    msg: "You need to define `kukaroll_hostname` (or `kukaroll_container_labels_traefik_hostname`) for the Traefik labels."
+  when: kukaroll_container_labels_traefik_enabled | bool and kukaroll_container_labels_traefik_hostname | length == 0
+
+- name: Fail if kukaroll's Traefik hostname is invalid
+  ansible.builtin.fail:
+    msg: "kukaroll_container_labels_traefik_hostname (`{{ kukaroll_container_labels_traefik_hostname }}`) must be a hostname: letters, digits, dots and dashes."
+  when: kukaroll_container_labels_traefik_hostname | length > 0 and kukaroll_container_labels_traefik_hostname is not match('^[A-Za-z0-9.-]+$')

@@ -1,0 +1,249 @@
+# SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+---
+
+# Whoever can write to a directory above kukaroll_base_path could rename it (even though it is root-owned) and put another one in its place,
+# with an executor configuration that runs their commands as root.
+# Symlinks on the way (e.g. /mash -> /mnt/storage/mash) are followed: the directories of both paths are checked.
+- name: Resolve kukaroll_base_path
+  ansible.builtin.command:
+    argv: [realpath, --canonicalize-missing, "{{ kukaroll_base_path }}"]
+  changed_when: false
+  check_mode: false
+  register: kukaroll_base_path_resolved
+
+- name: Check the directories above kukaroll_base_path
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop: |-
+    {% set ns = namespace(paths=[]) %}
+    {% for path in [kukaroll_base_path, kukaroll_base_path_resolved.stdout] %}
+    {% set parts = path.strip('/').split('/') %}
+    {% for i in range(0, parts | length) %}{% set ns.paths = ns.paths + ['/' + (parts[:i] | join('/'))] %}{% endfor %}
+    {% endfor %}
+    {{ ns.paths | unique }}
+  register: kukaroll_base_path_parents
+
+- name: Fail if a directory above kukaroll_base_path is writable by anyone but root
+  ansible.builtin.fail:
+    msg: >-
+      {{ item.stat.path }} must be owned by root and writable only by root (it is owned by uid {{ item.stat.uid }}, mode {{ item.stat.mode }}):
+      whoever can write there could replace {{ kukaroll_base_path }}, and with it the commands the executor runs as root.
+      In mash-playbook, update the playbook: it makes its base directory root-owned since 2026-10-30.
+  loop: "{{ kukaroll_base_path_parents.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  # A symlink's own mode means nothing; the directory holding it is checked, and so is its target's path.
+  # The group and others digits of the mode: 2, 3, 6 and 7 include write access.
+  when: item.stat.exists and not item.stat.islnk and (item.stat.uid != 0 or item.stat.mode[-2:] is search('[2367]'))
+
+- name: Ensure kukaroll paths exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+  loop:
+    - {path: "{{ kukaroll_base_path }}", mode: '0750', owner: root, group: "{{ kukaroll_gid }}"}
+    - {path: "{{ kukaroll_bin_path }}", mode: '0750', owner: root, group: root}
+    - {path: "{{ kukaroll_config_path }}", mode: '0750', owner: root, group: "{{ kukaroll_gid }}"}
+    - {path: "{{ kukaroll_secrets_path }}", mode: '0750', owner: root, group: "{{ kukaroll_gid }}"}
+    # Only the receiver's user may create spool files; trigger creates them as that user.
+    - {path: "{{ kukaroll_spool_path }}", mode: '0700', owner: "{{ kukaroll_uid }}", group: "{{ kukaroll_gid }}"}
+
+- name: Ensure the kukaroll container image is pulled
+  when: not kukaroll_container_image_self_build | bool and not kukaroll_container_image.startswith('localhost/')
+  block:
+    - name: Ensure the kukaroll container image is pulled via community.docker.docker_image_pull
+      when: devture_systemd_docker_base_container_image_pull_method == 'ansible-module'
+      community.docker.docker_image_pull:
+        name: "{{ kukaroll_container_image }}"
+        pull: always
+      register: kukaroll_container_image_pull_result_ansible_module
+      retries: "{{ devture_playbook_help_container_retries_count }}"
+      delay: "{{ devture_playbook_help_container_retries_delay }}"
+      until: kukaroll_container_image_pull_result_ansible_module is not failed
+
+    - name: Ensure the kukaroll container image is pulled via ansible.builtin.command
+      when: devture_systemd_docker_base_container_image_pull_method == 'command'
+      ansible.builtin.command:
+        cmd: "{{ devture_systemd_docker_base_host_command_docker }} pull {{ kukaroll_container_image }}"
+      register: kukaroll_container_image_pull_result_command
+      retries: "{{ devture_playbook_help_container_retries_count }}"
+      delay: "{{ devture_playbook_help_container_retries_delay }}"
+      until: kukaroll_container_image_pull_result_command is not failed
+      changed_when: "'Downloaded newer image' in kukaroll_container_image_pull_result_command.stdout"
+
+- name: Ensure the kukaroll container image is built
+  when: kukaroll_container_image_self_build | bool
+  block:
+    # As root, into a root-owned directory: the image runs privileged.
+    - name: Ensure the kukaroll repository is present on self-build
+      ansible.builtin.git:
+        repo: "{{ kukaroll_container_image_self_build_repo }}"
+        version: "{{ kukaroll_container_image_self_build_repo_version }}"
+        dest: "{{ kukaroll_container_image_self_build_src_files_path }}"
+        force: true
+      register: kukaroll_git_pull_results
+
+    - name: Ensure the kukaroll container image is built
+      community.docker.docker_image_build:
+        name: "{{ kukaroll_container_image }}"
+        dockerfile: Dockerfile
+        path: "{{ kukaroll_container_image_self_build_src_files_path }}"
+        args:
+          KUKAROLL_VERSION: "{{ kukaroll_version }}"
+        pull: true
+        rebuild: "{{ 'always' if kukaroll_git_pull_results.changed | bool else 'never' }}"
+      register: kukaroll_container_image_build_result
+
+# An image under `localhost/` is not in any registry: someone built or loaded it on the host.
+- name: Check that the kukaroll container image is on the host
+  when: not kukaroll_container_image_self_build | bool and kukaroll_container_image.startswith('localhost/')
+  ansible.builtin.command:
+    cmd: "{{ devture_systemd_docker_base_host_command_docker }} image inspect --format '{{ '{{' }} .Id {{ '}}' }}' {{ kukaroll_container_image }}"
+  changed_when: false
+  check_mode: false
+
+- name: Ensure kukaroll helper scripts are installed
+  ansible.builtin.template:
+    src: "{{ role_path }}/templates/bin/{{ item }}.j2"
+    dest: "{{ kukaroll_bin_path }}/{{ item }}"
+    mode: '0750'
+    owner: root
+    group: root
+  loop: [check-config, trigger]
+
+- name: Ensure kukaroll webhook secrets are installed
+  ansible.builtin.copy:
+    content: "{{ item.value.webhook_secret }}\n"
+    dest: "{{ kukaroll_secrets_path }}/{{ item.key }}"
+    mode: '0440'
+    owner: root
+    group: "{{ kukaroll_gid }}"
+  loop: "{{ kukaroll_projects | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: kukaroll_secrets_result
+  no_log: true
+  diff: false
+
+- name: Find kukaroll webhook secrets
+  ansible.builtin.find:
+    paths: "{{ kukaroll_secrets_path }}"
+  register: kukaroll_secrets_found
+
+- name: Ensure webhook secrets of removed kukaroll projects don't exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ kukaroll_secrets_found.files | map(attribute='path') | map('basename') | reject('in', kukaroll_projects | list) | map('regex_replace', '^', kukaroll_secrets_path + '/') | list }}"
+  register: kukaroll_secrets_removal_result
+
+# check-config validates the files the way kukaroll reads them; it does not look at the host.
+- name: Ensure kukaroll configuration is installed
+  ansible.builtin.template:
+    src: "{{ role_path }}/templates/{{ item.name }}.yaml.j2"
+    dest: "{{ item.dest }}/{{ item.name }}.yaml"
+    mode: "{{ item.mode }}"
+    owner: root
+    group: "{{ item.group }}"
+    validate: "{{ kukaroll_bin_path }}/check-config {{ item.name }} %s"
+  loop:
+    - {name: receiver, dest: "{{ kukaroll_config_path }}", mode: '0440', group: "{{ kukaroll_gid }}"}
+    - {name: executor, dest: "{{ kukaroll_config_path }}", mode: '0400', group: root}
+  loop_control:
+    label: "{{ item.name }}"
+  register: kukaroll_config_result
+
+- name: Ensure kukaroll container labels are installed
+  ansible.builtin.template:
+    src: "{{ role_path }}/templates/labels.j2"
+    dest: "{{ kukaroll_base_path }}/labels"
+    mode: '0400'
+    owner: root
+    group: root
+  register: kukaroll_labels_result
+  # They may hold the projects' authorization header values.
+  diff: false
+
+- name: Ensure kukaroll systemd units are installed
+  ansible.builtin.template:
+    src: "{{ role_path }}/templates/systemd/{{ item }}.j2"
+    dest: "{{ devture_systemd_docker_base_systemd_path }}/{{ kukaroll_identifier }}-{{ item }}"
+    mode: '0644'
+  loop: "{{ ['receiver.service', 'deploys.target', 'catch-up.service', 'execute@.service', 'execute@.path'] + (['catch-up.timer'] if kukaroll_catch_up_timer_enabled | bool else []) }}"
+  register: kukaroll_units_result
+
+- name: Ensure the kukaroll catch-up timer doesn't exist, when disabled
+  when: not kukaroll_catch_up_timer_enabled | bool
+  block:
+    - name: Check existence of the kukaroll catch-up timer
+      ansible.builtin.stat:
+        path: "{{ devture_systemd_docker_base_systemd_path }}/{{ kukaroll_identifier }}-catch-up.timer"
+      register: kukaroll_catch_up_timer_stat
+
+    - name: Ensure the kukaroll catch-up timer is stopped and disabled
+      ansible.builtin.systemd_service:
+        name: "{{ kukaroll_identifier }}-catch-up.timer"
+        state: stopped
+        enabled: false
+      when: kukaroll_catch_up_timer_stat.stat.exists
+
+    # Also its enable link, in case the unit was removed by hand while enabled.
+    - name: Ensure the kukaroll catch-up timer unit doesn't exist
+      ansible.builtin.file:
+        path: "{{ devture_systemd_docker_base_systemd_path }}/{{ item }}"
+        state: absent
+      loop:
+        - "{{ kukaroll_identifier }}-catch-up.timer"
+        - "{{ kukaroll_identifier }}-deploys.target.wants/{{ kukaroll_identifier }}-catch-up.timer"
+      register: kukaroll_catch_up_timer_removal_result
+
+- name: Ensure systemd is reloaded
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: kukaroll_units_result is changed or kukaroll_catch_up_timer_removal_result is changed
+
+# The executor reads its configuration on every run, so only the receiver needs restarting (also for new labels).
+- name: Determine whether the kukaroll receiver needs a restart
+  ansible.builtin.set_fact:
+    kukaroll_restart_necessary: >-
+      {{
+        kukaroll_secrets_result is changed
+        or kukaroll_container_image_pull_result_ansible_module.changed | default(false)
+        or kukaroll_container_image_pull_result_command.changed | default(false)
+        or kukaroll_container_image_build_result.changed | default(false)
+        or kukaroll_secrets_removal_result is changed
+        or kukaroll_labels_result is changed
+        or kukaroll_config_result.results | selectattr('item.name', 'equalto', 'receiver') | selectattr('changed') | list | length > 0
+        or kukaroll_units_result.results | selectattr('item', 'equalto', 'receiver.service') | selectattr('changed') | list | length > 0
+      }}
+
+# `systemctl list-unit-files` shows only the template, not its enabled instances: those are the target's links.
+- name: Find enabled kukaroll path units
+  ansible.builtin.find:
+    paths: "{{ devture_systemd_docker_base_systemd_path }}/{{ kukaroll_identifier }}-deploys.target.wants"
+    patterns: "{{ kukaroll_identifier }}-execute@*.path"
+    file_type: link
+  register: kukaroll_path_units_enabled
+
+- name: Ensure path units of removed kukaroll projects are disabled
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ kukaroll_path_units_enabled.files | map(attribute='path') | map('basename') | reject('in', kukaroll_path_unit_names) | list }}"
+
+# Enabled into the deploys target, which starts them.
+- name: Ensure path units of kukaroll projects (and the catch-up, with its timer) are enabled
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+  loop: "{{ kukaroll_path_unit_names + [kukaroll_identifier + '-catch-up.service'] + ([kukaroll_identifier + '-catch-up.timer'] if kukaroll_catch_up_timer_enabled | bool else []) }}"
+  # In check mode, the units above are not really installed.
+  when: not ansible_check_mode

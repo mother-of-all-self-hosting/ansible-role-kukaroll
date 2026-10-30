@@ -1,0 +1,22 @@
+#jinja2: lstrip_blocks: True
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+# Managed by Ansible (the kukaroll role).
+# Host paths: the executor works in the host's namespaces.
+schema_version: 1
+projects:
+{% for name, project in kukaroll_projects.items() %}
+  {{ name | to_json }}:
+    checkout: {{ project.checkout | to_json }}
+    remote: {{ project.remote | to_json }}
+    branch: {{ project.branch | to_json }}
+    git_user: {{ project.git_user | to_json }}
+    hooks_user: {{ project.hooks_user | to_json }}
+    lock_file: {{ project.lock_file | to_json }}
+    pre_flight: {{ project.pre_flight | to_json }}
+    deploy: {{ project.deploy | to_json }}
+    healthchecks: {{ ({'ping_url': project.healthchecks_ping_url} if project.healthchecks_ping_url is not none else none) | to_json }}
+{% endfor %}

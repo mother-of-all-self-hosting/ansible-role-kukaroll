@@ -1,0 +1,18 @@
+#!/bin/sh
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+# Managed by Ansible.
+# Validates a kukaroll configuration file, reporting every problem found.
+# Usage: check-config receiver|executor FILE
+set -eu
+if [ $# -ne 2 ]; then
+	echo "Usage: $0 receiver|executor FILE" >&2
+	exit 2
+fi
+# As root: the image defaults to nobody, which may not be able to read the file.
+exec {{ devture_systemd_docker_base_host_command_docker }} run --rm --network=none --user 0:0 \
+	--mount type=bind,src="$(realpath "$2")",dst=/config.yaml,readonly \
+	{{ kukaroll_container_image }} check-config "$1" /config.yaml

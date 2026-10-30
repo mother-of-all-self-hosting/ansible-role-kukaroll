@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+---
+
+- name: Perform kukaroll installation tasks
+  when: kukaroll_enabled | bool
+  tags:
+    - setup-all
+    - setup-kukaroll
+    - install-all
+    - install-kukaroll
+  block:
+    - name: Validate kukaroll configuration
+      ansible.builtin.include_tasks: "{{ role_path }}/tasks/validate_config.yml"
+    - name: Install kukaroll
+      ansible.builtin.include_tasks: "{{ role_path }}/tasks/install.yml"
+
+# Before services get (re)started or stopped, so that no deploy works on a stack meanwhile.
+- name: Pause kukaroll deploys
+  when: kukaroll_enabled | bool and kukaroll_pause_enabled | bool
+  tags:
+    - start
+    - start-all
+    - start-group
+    - restart
+    - restart-all
+    - restart-group
+    - stop
+    - stop-all
+    - stop-group
+  block:
+    - name: Pause kukaroll deploys
+      ansible.builtin.include_tasks: "{{ role_path }}/tasks/pause.yml"
+
+- name: Perform kukaroll uninstallation tasks
+  when: not kukaroll_enabled | bool
+  tags:
+    - setup-all
+    - setup-kukaroll
+  block:
+    - name: Uninstall kukaroll
+      ansible.builtin.include_tasks: "{{ role_path }}/tasks/uninstall.yml"

@@ -1,0 +1,19 @@
+#jinja2: lstrip_blocks: True
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+# Part of the deploys target: every time deploys resume (after a playbook run, at boot), and on its timer (if enabled), every project's pending deploy gets another chance.
+# A project whose branch tip is already deployed only gets a no-op run.
+[Unit]
+Description=kukaroll deploys catch-up ({{ kukaroll_identifier }})
+PartOf={{ kukaroll_identifier }}-deploys.target
+After={{ kukaroll_identifier }}-deploys.target
+
+[Service]
+Type=oneshot
+ExecStart={{ kukaroll_bin_path }}/trigger --all
+
+[Install]
+WantedBy={{ kukaroll_identifier }}-deploys.target

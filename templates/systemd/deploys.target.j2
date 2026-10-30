@@ -1,0 +1,15 @@
+#jinja2: lstrip_blocks: True
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+# Every project's {{ kukaroll_identifier }}-execute@<project>.path is part of this target: stopping it pauses deploys (running ones finish), starting it resumes them.
+[Unit]
+Description=kukaroll deploys ({{ kukaroll_identifier }})
+{% for service in kukaroll_deploys_systemd_after_services_list %}
+After={{ service }}
+{% endfor %}
+
+[Install]
+WantedBy=multi-user.target

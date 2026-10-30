@@ -1,0 +1,41 @@
+#jinja2: lstrip_blocks: True
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+# Started by {{ kukaroll_identifier }}-execute@<project>.path.
+# systemd runs 1 instance per project at a time and folds triggers that arrive during a run into 1 follow-up run.
+[Unit]
+Description=kukaroll deploy of %i
+{% if devture_systemd_docker_base_docker_service_name %}
+Requires={{ devture_systemd_docker_base_docker_service_name }}
+After={{ devture_systemd_docker_base_docker_service_name }}
+{% endif %}
+
+[Service]
+Type=oneshot
+Environment="HOME={{ devture_systemd_docker_base_systemd_unit_home_path }}"
+# Bounds the whole run, including waiting for the project's lock.
+TimeoutStartSec={{ kukaroll_executor_timeout_seconds }}
+# Before anything can fail (a missing image, a broken configuration): a spool file left behind would retrigger the failing run until systemd's start limit.
+# A push during the run creates it again, which triggers 1 follow-up run.
+# As the receiver's user: root must not act on paths in a directory that user controls.
+ExecStartPre=/usr/bin/setpriv --reuid={{ kukaroll_uid }} --regid={{ kukaroll_gid }} --clear-groups -- /usr/bin/rm -f {{ kukaroll_spool_path }}/%i
+ExecStartPre=-{{ devture_systemd_docker_base_host_command_docker }} rm --force {{ kukaroll_identifier }}-execute-%i
+# Privileged with the host's PID namespace: the executor joins the host's namespaces and runs git and the hooks there as the project's users.
+# Output is attached, so it lands in this unit's journal.
+ExecStart={{ devture_systemd_docker_base_host_command_docker }} run \
+      --rm \
+      --name={{ kukaroll_identifier }}-execute-%i \
+      --log-driver=none \
+      --privileged \
+      --pid=host \
+      --user=0:0 \
+      --network=none \
+      --mount type=bind,src={{ kukaroll_config_path }}/executor.yaml,dst=/config/executor.yaml,ro \
+      {{ kukaroll_container_image }} \
+      execute --config /config/executor.yaml %i
+# On timeout systemd kills the docker client; this makes sure the container (and every hook process, which stays in its cgroup) goes too.
+ExecStopPost=-{{ devture_systemd_docker_base_host_command_docker }} rm --force {{ kukaroll_identifier }}-execute-%i
+SyslogIdentifier={{ kukaroll_identifier }}-execute-%i

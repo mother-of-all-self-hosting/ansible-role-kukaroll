@@ -1,0 +1,19 @@
+#jinja2: lstrip_blocks: True
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+# Managed by Ansible (the kukaroll role).
+# Paths as mounted into the receiver's container.
+schema_version: 1
+listen: 0.0.0.0:8080
+spool_dir: /spool
+projects:
+{% for name, project in kukaroll_projects.items() %}
+  {{ name | to_json }}:
+    branch: {{ project.branch | to_json }}
+    webhook:
+      provider: {{ project.webhook_provider | to_json }}
+      secret_file: /secrets/{{ name }}
+{% endfor %}

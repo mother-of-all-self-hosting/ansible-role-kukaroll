@@ -1,0 +1,19 @@
+#jinja2: lstrip_blocks: True
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+# One instance per project.
+# The receiver creates the spool file; the executor deletes it first thing.
+[Unit]
+Description=kukaroll deploy trigger for %i
+PartOf={{ kukaroll_identifier }}-deploys.target
+After={{ kukaroll_identifier }}-deploys.target
+
+[Path]
+PathExists={{ kukaroll_spool_path }}/%i
+Unit={{ kukaroll_identifier }}-execute@%i.service
+
+[Install]
+WantedBy={{ kukaroll_identifier }}-deploys.target

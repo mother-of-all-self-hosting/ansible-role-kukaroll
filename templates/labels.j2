@@ -1,0 +1,40 @@
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+
+{% if kukaroll_container_labels_traefik_enabled %}
+traefik.enable=true
+
+{% if kukaroll_container_labels_traefik_docker_network %}
+traefik.docker.network={{ kukaroll_container_labels_traefik_docker_network }}
+{% endif %}
+
+{% if kukaroll_container_labels_traefik_path_prefix != '/' %}
+traefik.http.middlewares.{{ kukaroll_identifier }}-strip-prefix.stripprefix.prefixes={{ kukaroll_container_labels_traefik_path_prefix }}
+{% endif %}
+
+{% if kukaroll_container_labels_traefik_max_request_body_bytes | int > 0 %}
+traefik.http.middlewares.{{ kukaroll_identifier }}-buffering.buffering.maxRequestBodyBytes={{ kukaroll_container_labels_traefik_max_request_body_bytes | int }}
+{% endif %}
+
+{% for name, rule in kukaroll_container_labels_traefik_rules.items() %}
+traefik.http.routers.{{ kukaroll_identifier }}-{{ name }}.rule={{ rule }}
+traefik.http.routers.{{ kukaroll_identifier }}-{{ name }}.service={{ kukaroll_identifier }}
+{% if kukaroll_container_labels_traefik_middlewares | length > 0 %}
+traefik.http.routers.{{ kukaroll_identifier }}-{{ name }}.middlewares={{ kukaroll_container_labels_traefik_middlewares | join(',') }}
+{% endif %}
+traefik.http.routers.{{ kukaroll_identifier }}-{{ name }}.entrypoints={{ kukaroll_container_labels_traefik_entrypoints }}
+traefik.http.routers.{{ kukaroll_identifier }}-{{ name }}.tls={{ kukaroll_container_labels_traefik_tls | to_json }}
+{% if kukaroll_container_labels_traefik_tls %}
+traefik.http.routers.{{ kukaroll_identifier }}-{{ name }}.tls.certResolver={{ kukaroll_container_labels_traefik_tls_certResolver }}
+{% endif %}
+
+{% endfor %}
+traefik.http.services.{{ kukaroll_identifier }}.loadbalancer.server.port=8080
+{% endif %}
+
+{% for label in kukaroll_container_labels_additional_labels %}
+{{ label }}
+{% endfor %}

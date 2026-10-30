@@ -1,0 +1,196 @@
+# SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+---
+# Project source code URL: https://github.com/devture/kukaroll
+#
+# kukaroll deploys git checkouts on pushes to their forge.
+# A receiver container takes the webhooks; per project, a `.path` unit starts a privileged executor container when one arrives.
+# Stopping `<identifier>-deploys.target` pauses deploys (its path units are part of it); starting it resumes them.
+
+kukaroll_enabled: true
+
+kukaroll_identifier: kukaroll
+
+# Root reads the executor's configuration from here, and it names the commands the executor runs as root.
+# So the role makes everything here root-owned (except the spool directory),
+# and refuses to install when a directory above it is writable by anyone but root:
+# whoever can write there could put another directory in its place.
+kukaroll_base_path: "/{{ kukaroll_identifier }}"
+# The receiver's and the executor's configuration.
+kukaroll_config_path: "{{ kukaroll_base_path }}/config"
+kukaroll_secrets_path: "{{ kukaroll_base_path }}/secrets"
+# The receiver creates 1 file per project here; the executor's unit deletes it (as the receiver's user).
+kukaroll_spool_path: "{{ kukaroll_base_path }}/spool"
+# Helpers for Ansible and humans: check-config, trigger.
+kukaroll_bin_path: "{{ kukaroll_base_path }}/bin"
+
+# The receiver runs as this user.
+# The executor runs as root and switches to each project's users.
+kukaroll_uid: ""
+kukaroll_gid: ""
+
+# kukaroll is released as CalVer (`YYYY.MM.DD.N`), which is not semver: `versioning=loose` compares all 4 parts.
+# Updates are never automerged: these versions carry no compatibility meaning.
+# The role's own tags are `v<kukaroll_version>-<release>` (see bin/compute-next-tag.sh).
+# renovate: datasource=docker depName=ghcr.io/devture/kukaroll versioning=loose
+kukaroll_version: 2026.10.30.0
+
+# The receiver and the executor run this image.
+# An image under `localhost/` is never pulled: it has to be on the host already (built or loaded by hand), or the role fails.
+kukaroll_container_image: "{{ kukaroll_container_image_registry_prefix }}devture/kukaroll:{{ kukaroll_container_image_tag }}"
+kukaroll_container_image_tag: "{{ kukaroll_version }}"
+kukaroll_container_image_registry_prefix: "{{ 'localhost/' if kukaroll_container_image_self_build else kukaroll_container_image_registry_prefix_upstream }}"
+kukaroll_container_image_registry_prefix_upstream: "{{ kukaroll_container_image_registry_prefix_upstream_default }}"
+kukaroll_container_image_registry_prefix_upstream_default: ghcr.io/
+
+# Builds the image on the host from kukaroll's repository instead of pulling it.
+# The sources are root-owned, as the image runs privileged: only root may be able to change them.
+kukaroll_container_image_self_build: false
+kukaroll_container_image_self_build_repo: "https://github.com/devture/kukaroll.git"
+kukaroll_container_image_self_build_repo_version: "{{ 'main' if kukaroll_version in ['latest', 'edge'] else ('v' + (kukaroll_version | regex_replace('^v', ''))) }}"
+kukaroll_container_image_self_build_src_files_path: "{{ kukaroll_base_path }}/container-src"
+
+# The network the receiver joins, e.g. the reverse proxy's.
+# Empty means Docker's default bridge.
+kukaroll_receiver_container_network: ""
+
+# Publishes the receiver's port (8080) on the host, e.g. "127.0.0.1:8080".
+# Empty does not publish it.
+kukaroll_receiver_container_http_host_bind_port: ""
+
+# The webhooks' public URL: https://<kukaroll_hostname><kukaroll_path_prefix>/hooks/<project>.
+# The path prefix is stripped before requests reach the receiver.
+# It must be `/`, or slash-separated segments of letters, digits, `.`, `_`, `~` and `-`, starting with a slash and not ending with one (e.g. `/kukaroll`).
+kukaroll_hostname: ""
+kukaroll_path_prefix: /
+
+# Traefik routing, as labels on the receiver's container.
+# Each project gets its own router, matching only its webhook path and, with a `webhook_authorization_header`, that `Authorization` header.
+# Requests that match no router get Traefik's 404 and never reach the receiver.
+kukaroll_container_labels_traefik_enabled: true
+kukaroll_container_labels_traefik_docker_network: "{{ kukaroll_receiver_container_network }}"
+kukaroll_container_labels_traefik_hostname: "{{ kukaroll_hostname }}"
+kukaroll_container_labels_traefik_path_prefix: "{{ kukaroll_path_prefix }}"
+kukaroll_container_labels_traefik_entrypoints: web-secure
+kukaroll_container_labels_traefik_tls: "{{ kukaroll_container_labels_traefik_entrypoints != 'web' }}"
+kukaroll_container_labels_traefik_tls_certResolver: default  # noqa var-naming
+
+# Traefik answers larger request bodies with 413 before they reach the receiver (which accepts up to 16 MiB).
+# 0 disables the limit.
+# A forge's push payload lists the changed files of (up to a few of) the pushed commits: usually a few KiB, rarely more than a few hundred.
+# A rejected delivery delays a deploy only until the next push, which deploys the branch's head.
+kukaroll_container_labels_traefik_max_request_body_bytes: 1048576
+
+# Keyed by project name.
+kukaroll_container_labels_traefik_rules: "{{ (kukaroll_container_labels_traefik_rules_yaml | from_yaml) or {} }}"
+kukaroll_container_labels_traefik_rules_yaml: |
+  {% for name, project in kukaroll_projects.items() %}
+  {{ name | to_json }}: {{ ('Host(`' + kukaroll_container_labels_traefik_hostname + '`) && Path(`' + kukaroll_container_labels_traefik_path_prefix | regex_replace('/$', '') + '/hooks/' + name + '`)' + ((' && Header(`Authorization`, `' + project.webhook_authorization_header + '`)') if project.webhook_authorization_header is not none else '')) | to_json }}
+  {% endfor %}
+
+kukaroll_container_labels_traefik_middlewares: "{{ ([kukaroll_identifier + '-strip-prefix'] if kukaroll_container_labels_traefik_path_prefix != '/' else []) + ([kukaroll_identifier + '-buffering'] if kukaroll_container_labels_traefik_max_request_body_bytes | int > 0 else []) }}"
+
+# kukaroll_container_labels_additional_labels contains a list of additional labels to add to the container label file.
+# To add your own custom labels, use `kukaroll_container_labels_additional_labels_custom`.
+kukaroll_container_labels_additional_labels: "{{ kukaroll_container_labels_additional_labels_auto + kukaroll_container_labels_additional_labels_custom }}"
+kukaroll_container_labels_additional_labels_auto: []
+kukaroll_container_labels_additional_labels_custom: []
+
+# Units the receiver needs (required), and ones it should start with (wanted).
+kukaroll_systemd_required_services_list: "{{ kukaroll_systemd_required_services_list_default + kukaroll_systemd_required_services_list_auto + kukaroll_systemd_required_services_list_custom }}"
+kukaroll_systemd_required_services_list_default: "{{ [devture_systemd_docker_base_docker_service_name] if devture_systemd_docker_base_docker_service_name else [] }}"
+kukaroll_systemd_required_services_list_auto: []
+kukaroll_systemd_required_services_list_custom: []
+
+kukaroll_systemd_wanted_services_list: "{{ kukaroll_systemd_wanted_services_list_default + kukaroll_systemd_wanted_services_list_auto + kukaroll_systemd_wanted_services_list_custom }}"
+kukaroll_systemd_wanted_services_list_default: []
+kukaroll_systemd_wanted_services_list_auto: []
+kukaroll_systemd_wanted_services_list_custom: []
+
+# Units the deploys target (and so every deploy trigger) starts after, e.g. the projects' stacks.
+# When the stacks (re)start together with the target, as at boot or in 1 `systemctl restart`, no deploy starts before them.
+kukaroll_deploys_systemd_after_services_list: "{{ kukaroll_deploys_systemd_after_services_list_auto + kukaroll_deploys_systemd_after_services_list_custom }}"
+kukaroll_deploys_systemd_after_services_list_auto: []
+kukaroll_deploys_systemd_after_services_list_custom: []
+
+# How long the receiver gets to stop before it is killed.
+kukaroll_container_stop_grace_time_seconds: "{{ devture_systemd_docker_base_container_stop_grace_time_seconds }}"
+
+# Controls how long the pre-start cleanup waits for Docker to release the receiver's container name.
+kukaroll_container_cleanup_timeout_seconds: "{{ devture_systemd_docker_base_container_cleanup_timeout_seconds }}"
+
+# Controls the delay between pre-start cleanup retries.
+kukaroll_container_cleanup_retry_delay_seconds: "{{ devture_systemd_docker_base_container_cleanup_retry_delay_seconds }}"
+
+# Shell command used in the systemd pre-start phase to deterministically remove a stale receiver container and wait until Docker releases its name.
+kukaroll_container_cleanup_command: |
+  i=0;
+  while [ "$i" -lt {{ kukaroll_container_cleanup_timeout_seconds }} ]; do
+  {{ devture_systemd_docker_base_host_command_docker }} stop -t {{ kukaroll_container_stop_grace_time_seconds }} {{ kukaroll_identifier }}-receiver >/dev/null 2>&1 || true;
+  {{ devture_systemd_docker_base_host_command_docker }} rm -f {{ kukaroll_identifier }}-receiver >/dev/null 2>&1 || true;
+  if {{ devture_systemd_docker_base_host_command_docker }} container inspect {{ kukaroll_identifier }}-receiver >/dev/null 2>&1; then
+  i=$((i + 1));
+  sleep {{ kukaroll_container_cleanup_retry_delay_seconds }};
+  continue;
+  fi;
+  if {{ devture_systemd_docker_base_host_command_docker }} info >/dev/null 2>&1; then
+  exit 0;
+  fi;
+  echo "Failed to query Docker daemon while cleaning up {{ kukaroll_identifier }}-receiver" >&2;
+  exit 1;
+  done;
+  echo "Failed to remove stale container {{ kukaroll_identifier }}-receiver after {{ kukaroll_container_cleanup_timeout_seconds }} attempts" >&2;
+  exit 1
+
+# Bounds a whole deploy run, including waiting for the project's lock.
+# Pausing waits up to this long for running deploys to finish.
+kukaroll_executor_timeout_seconds: 1800
+
+# Requests a deploy of every project periodically, like the catch-up that runs whenever deploys resume (after a playbook run, at boot).
+# It makes up for a webhook lost while the host was up (e.g. during a reverse proxy restart), which would otherwise wait for the next push.
+# A project whose branch tip is already deployed gets a short run (a few seconds: the executor's container and a `git fetch`), which still reports to its Healthchecks check (start and success), so frequent runs fill the check's history with no-ops.
+# The timer is part of the deploys target, so pausing deploys pauses it too.
+# Disabling it removes the timer on the next installation.
+kukaroll_catch_up_timer_enabled: true
+# A systemd calendar expression (see `man systemd.time`).
+kukaroll_catch_up_timer_on_calendar: daily
+# Spreads the runs, e.g. so that several hosts don't fetch from their forge at the same moment.
+kukaroll_catch_up_timer_randomized_delay_seconds: 3600
+
+# Keyed by project name (lowercase letters, digits, dashes and underscores, starting with a letter or digit, at most 64 characters), which is also its webhook path: /hooks/<name>.
+# Every key is required, without defaults (see kukaroll's docs/configuration.md and docs/hooks.md):
+#
+# kukaroll_projects:
+#   myapp:
+#     checkout: /srv/myapp
+#     remote: origin
+#     branch: main
+#     git_user: myapp
+#     hooks_user: root
+#     # Outside what `git checkout` writes: in an ignored directory of the checkout, or outside it.
+#     lock_file: /srv/myapp/var/deploy.lock
+#     pre_flight: [just, deploy-pre-flight]  # or null
+#     deploy: [just, deploy]  # or null
+#     healthchecks_ping_url: https://healthchecks.example.com/ping/UUID  # or null
+#     webhook_provider: forgejo  # forgejo, gitea or github
+#     webhook_secret: "{{ vault_kukaroll_webhook_secret_myapp }}"
+#     # Traefik routes only requests with exactly this `Authorization` header value (or null: no check).
+#     # A second secret, which the forge sends as its webhook's authorization header, e.g. `Bearer <token>` or `Basic <credentials>`.
+#     webhook_authorization_header: "Bearer {{ vault_kukaroll_webhook_bearer_token_myapp }}"
+kukaroll_projects: {}
+
+# Whether this run pauses deploys before (re)starting services: stops the deploys target and waits for running deploys.
+# Whoever starts the services afterwards must start the target again.
+kukaroll_pause_enabled: true
+
+# kukaroll_restart_necessary controls whether the receiver's systemd service will be restarted (when true) or merely started (when false) by the systemd service manager role (when conditional restart is enabled).
+#
+# This value is automatically computed during installation based on whether its configuration, labels, webhook secrets, systemd service file or container image changed.
+# The default of `false` means "no restart needed" — appropriate when the role's installation tasks haven't run (e.g. due to --tags skipping them).
+kukaroll_restart_necessary: false
+
+# The path units of the projects, 1 per project (see templates/systemd/execute@.path.j2).
+# Computed: do not override.
+kukaroll_path_unit_names: "{{ kukaroll_projects | list | map('regex_replace', '^(.*)$', kukaroll_identifier + '-execute@\\1.path') | list }}"

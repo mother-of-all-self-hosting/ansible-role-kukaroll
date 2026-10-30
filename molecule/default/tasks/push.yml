@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+---
+# Pushes a commit to the project's repository and sends its webhook, as a forge would.
+# Sets `kukaroll_pushed_commit` (its `stdout` is the commit).
+
+- name: Push a commit to the project's repository
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      work="$(mktemp -d)"
+      git clone --quiet {{ kukaroll_molecule_project_origin }} "$work"
+      echo {{ kukaroll_molecule_commit_message | quote }} > "$work/version"
+      git -C "$work" -c user.name=molecule -c user.email=molecule@example.com commit --quiet -am {{ kukaroll_molecule_commit_message | quote }}
+      git -C "$work" push --quiet origin main
+      git -C "$work" rev-parse HEAD
+      rm -rf "$work"
+  register: kukaroll_pushed_commit
+  changed_when: true
+
+- name: Send the push webhook
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "{{ kukaroll_molecule_webhook_sender }}"
+      - "{{ kukaroll_molecule_base_url }}/hooks/{{ kukaroll_molecule_project }}"
+      - "{{ kukaroll_projects.myapp.webhook_secret }}"
+  register: kukaroll_webhook_push
+  changed_when: false
+
+# 202: the receiver created the project's spool file.
+- name: Assert the receiver accepted the webhook
+  ansible.builtin.assert:
+    that: kukaroll_webhook_push.stdout == '202'
+    fail_msg: "The receiver answered the push webhook with {{ kukaroll_webhook_push.stdout }}, not 202"
+    success_msg: "The receiver accepted the push webhook"

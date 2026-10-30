@@ -1,0 +1,29 @@
+#!/bin/sh
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+# Managed by Ansible.
+# Starts a deploy of a project now, as a webhook would.
+# If its branch tip is already deployed, the run does nothing.
+# Follow it with: journalctl -fu {{ kukaroll_identifier }}-execute@PROJECT
+# Usage: trigger PROJECT|--all
+set -eu
+projects="{{ kukaroll_projects | list | join(' ') }}"
+if [ $# -ne 1 ]; then
+	echo "Usage: $0 PROJECT|--all (projects: ${projects})" >&2
+	exit 2
+fi
+if [ "$1" = --all ]; then
+	set -- ${projects}
+else
+	case " ${projects} " in
+		*" $1 "*) ;;
+		*) echo "Unknown project: $1" >&2; exit 2 ;;
+	esac
+fi
+for project in "$@"; do
+	# Created as the receiver's user: the spool directory is that user's, so root must not create or change paths in it (a planted symlink would redirect root).
+	setpriv --reuid={{ kukaroll_uid }} --regid={{ kukaroll_gid }} --clear-groups -- touch {{ kukaroll_spool_path }}/"${project}"
+done

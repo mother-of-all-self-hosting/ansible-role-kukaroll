@@ -1,0 +1,19 @@
+#jinja2: lstrip_blocks: True
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+# Part of the deploys target (paused with deploys): runs the catch-up periodically, so that a webhook lost while the host was up (e.g. during a reverse proxy restart) is made up for without waiting for the next push.
+[Unit]
+Description=kukaroll deploys catch-up timer ({{ kukaroll_identifier }})
+PartOf={{ kukaroll_identifier }}-deploys.target
+After={{ kukaroll_identifier }}-deploys.target
+
+[Timer]
+OnCalendar={{ kukaroll_catch_up_timer_on_calendar }}
+RandomizedDelaySec={{ kukaroll_catch_up_timer_randomized_delay_seconds }}
+Unit={{ kukaroll_identifier }}-catch-up.service
+
+[Install]
+WantedBy={{ kukaroll_identifier }}-deploys.target

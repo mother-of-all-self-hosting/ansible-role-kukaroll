@@ -1,0 +1,53 @@
+#jinja2: lstrip_blocks: True
+{#
+SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+#}
+[Unit]
+Description=kukaroll webhook receiver ({{ kukaroll_identifier }})
+{% for service in kukaroll_systemd_required_services_list %}
+Requires={{ service }}
+After={{ service }}
+{% endfor %}
+{% for service in kukaroll_systemd_wanted_services_list %}
+Wants={{ service }}
+{% endfor %}
+DefaultDependencies=no
+
+[Service]
+Type=simple
+Environment="HOME={{ devture_systemd_docker_base_systemd_unit_home_path }}"
+ExecStartPre={{ devture_systemd_docker_base_host_command_sh }} -c '{{ kukaroll_container_cleanup_command | trim | replace("\n", " ") }}'
+
+# Unprivileged: all it can do is create files in the spool directory.
+# On start, it creates every project's spool file, so deploys missed while it was down catch up.
+ExecStart={{ devture_systemd_docker_base_host_command_docker }} run \
+      --rm \
+      --name={{ kukaroll_identifier }}-receiver \
+      --log-driver=none \
+      --user={{ kukaroll_uid }}:{{ kukaroll_gid }} \
+      --read-only \
+      --cap-drop=ALL \
+      --security-opt=no-new-privileges \
+      {% if kukaroll_receiver_container_network %}
+      --network={{ kukaroll_receiver_container_network }} \
+      {% endif %}
+      {% if kukaroll_receiver_container_http_host_bind_port %}
+      --publish={{ kukaroll_receiver_container_http_host_bind_port }}:8080 \
+      {% endif %}
+      --label-file={{ kukaroll_base_path }}/labels \
+      --mount type=bind,src={{ kukaroll_config_path }}/receiver.yaml,dst=/config/receiver.yaml,ro \
+      --mount type=bind,src={{ kukaroll_secrets_path }},dst=/secrets,ro \
+      --mount type=bind,src={{ kukaroll_spool_path }},dst=/spool \
+      {{ kukaroll_container_image }} \
+      receive --config /config/receiver.yaml
+
+ExecStop=-{{ devture_systemd_docker_base_host_command_sh }} -c '{{ devture_systemd_docker_base_host_command_docker }} stop -t {{ kukaroll_container_stop_grace_time_seconds }} {{ kukaroll_identifier }}-receiver 2>/dev/null || true'
+ExecStop=-{{ devture_systemd_docker_base_host_command_sh }} -c '{{ devture_systemd_docker_base_host_command_docker }} rm {{ kukaroll_identifier }}-receiver 2>/dev/null || true'
+Restart=always
+RestartSec=30
+SyslogIdentifier={{ kukaroll_identifier }}-receiver
+
+[Install]
+WantedBy=multi-user.target

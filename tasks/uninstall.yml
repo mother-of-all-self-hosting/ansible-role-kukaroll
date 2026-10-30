@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 Slavi Pantaleev
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+---
+
+- name: Check existence of the kukaroll receiver unit
+  ansible.builtin.stat:
+    path: "{{ devture_systemd_docker_base_systemd_path }}/{{ kukaroll_identifier }}-receiver.service"
+  register: kukaroll_receiver_service_stat
+
+- name: Uninstall kukaroll systemd units
+  when: kukaroll_receiver_service_stat.stat.exists | bool
+  block:
+    # Stops the triggers and lets running deploys finish, before their files go.
+    - name: Pause kukaroll deploys
+      ansible.builtin.include_tasks: "{{ role_path }}/tasks/pause.yml"
+
+    - name: Ensure kukaroll units are stopped and disabled
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - "{{ kukaroll_identifier }}-receiver.service"
+        - "{{ kukaroll_identifier }}-deploys.target"
+
+    - name: Ensure kukaroll units don't exist
+      ansible.builtin.file:
+        path: "{{ devture_systemd_docker_base_systemd_path }}/{{ item }}"
+        state: absent
+      loop:
+        - "{{ kukaroll_identifier }}-receiver.service"
+        - "{{ kukaroll_identifier }}-deploys.target"
+        # Holds the links that enable the path units
+        - "{{ kukaroll_identifier }}-deploys.target.wants"
+        - "{{ kukaroll_identifier }}-catch-up.service"
+        - "{{ kukaroll_identifier }}-catch-up.timer"
+        - "{{ kukaroll_identifier }}-execute@.service"
+        - "{{ kukaroll_identifier }}-execute@.path"
+
+    - name: Ensure systemd is reloaded
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+- name: Ensure kukaroll files don't exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ kukaroll_base_path }}"
