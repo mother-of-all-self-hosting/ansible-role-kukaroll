@@ -10,6 +10,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 Description=kukaroll deploy trigger for %i
 PartOf={{ kukaroll_identifier }}-deploys.target
 After={{ kukaroll_identifier }}-deploys.target
+# The default dependencies would also order this before paths.target, which comes before basic.target, so before docker and the projects' services:
+# with the line above, that's an ordering cycle, which systemd breaks at boot by dropping a job of its choice (possibly docker's start).
+# These are the remaining default dependencies.
+DefaultDependencies=no
+Requires=sysinit.target
+After=sysinit.target
+Conflicts=shutdown.target
+Before=shutdown.target
 
 [Path]
 PathExists={{ kukaroll_spool_path }}/%i
