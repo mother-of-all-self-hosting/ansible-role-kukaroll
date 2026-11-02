@@ -96,7 +96,7 @@
         dockerfile: Dockerfile
         path: "{{ kukaroll_container_image_self_build_src_files_path }}"
         args:
-          KUKAROLL_VERSION: "{{ kukaroll_version }}"
+          KUKAROLL_VERSION: "{{ kukaroll_version | regex_replace('^v', '') }}"
         pull: true
         rebuild: "{{ 'always' if kukaroll_git_pull_results.changed | bool else 'never' }}"
       register: kukaroll_container_image_build_result

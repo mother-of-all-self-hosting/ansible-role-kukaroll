@@ -31,11 +31,11 @@ kukaroll_bin_path: "{{ kukaroll_base_path }}/bin"
 kukaroll_uid: ""
 kukaroll_gid: ""
 
-# kukaroll is released as CalVer (`YYYY.MM.DD.N`), which is not semver: `versioning=loose` compares all 4 parts.
+# kukaroll is released as CalVer (`vYYYY.MM.DD.N`, the image tag), which is not semver: `versioning=loose` compares all 4 parts.
 # Updates are never automerged: these versions carry no compatibility meaning.
 # The role's own tags are `v<kukaroll_version>-<release>` (see bin/compute-next-tag.sh).
 # renovate: datasource=docker depName=ghcr.io/devture/kukaroll versioning=loose
-kukaroll_version: 2026.10.30.0
+kukaroll_version: v2026.11.02.0
 
 # The receiver and the executor run this image.
 # An image under `localhost/` is never pulled: it has to be on the host already (built or loaded by hand), or the role fails.

@@ -41,8 +41,8 @@ if [ -z "$version" ]; then
 	exit 1
 fi
 
-# kukaroll's CalVer versions do not carry a leading `v` (e.g. `2026.10.30.0`), but the tags do (`v2026.10.30.0-0`).
-# Stripping any `v` before prepending one keeps this correct even if the version values ever start carrying one.
+# kukaroll's versions carry a leading `v` (e.g. `v2026.11.02.0`; releases up to `2026.11.02.0` also had unprefixed image tags),
+# and so do the role's tags (`v2026.11.02.0-0`): stripping any `v` before prepending one handles both.
 tag_prefix="v${version#v}-"
 
 # Of all releases of this version, the highest release number.

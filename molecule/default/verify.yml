@@ -273,7 +273,7 @@
           ansible.builtin.debug:
             msg:
               - "kukaroll systemd: {% for unit, state in kukaroll_verify_units | zip(kukaroll_services.results | map(attribute='status.ActiveState')) %}{{ unit }} ({{ state }}){% if not loop.last %}, {% endif %}{% endfor %}"
-              - "kukaroll version: {{ kukaroll_defaults.kukaroll_version }}"
+              - "kukaroll version: {{ kukaroll_defaults.kukaroll_version | regex_replace('^v', '') }}"
               - "kukaroll deploys: catch-up, signed webhook, and a webhook received while paused"
 
       rescue:
