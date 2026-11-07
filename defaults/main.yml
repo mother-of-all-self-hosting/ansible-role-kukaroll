@@ -35,7 +35,7 @@ kukaroll_gid: ""
 # Updates are never automerged: these versions carry no compatibility meaning.
 # The role's own tags are `v<kukaroll_version>-<release>` (see bin/compute-next-tag.sh).
 # renovate: datasource=docker depName=ghcr.io/devture/kukaroll versioning=loose
-kukaroll_version: v2026.11.02.0
+kukaroll_version: v2026.11.06.0
 
 # The receiver and the executor run this image.
 # An image under `localhost/` is never pulled: it has to be on the host already (built or loaded by hand), or the role fails.
